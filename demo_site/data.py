@@ -190,6 +190,13 @@ TYPE_LABELS = {
     "other": "其他公告",
 }
 
+# Demonstration editions.  "stable" keeps one revision across every page and
+# detail; "changing" switches revision at the page 1 -> page 2 boundary so the
+# checker can show that mixed editions must not be merged.
+STABLE_REVISION = "REV-2026-11-12.1"
+CHANGED_REVISION = "REV-2026-11-12.2"
+EDITIONS = {"none", "stable", "changing"}
+
 
 def page_count() -> int:
     return (len(NOTICES_ASC) + PAGE_SIZE - 1) // PAGE_SIZE
@@ -198,3 +205,19 @@ def page_count() -> int:
 def notices_on_page(page: int) -> list[Notice]:
     start = (page - 1) * PAGE_SIZE
     return list(NOTICES_ASC[start : start + PAGE_SIZE])
+
+
+def page_for_notice(notice: Notice) -> int:
+    return NOTICES_ASC.index(notice) // PAGE_SIZE + 1
+
+
+def revision_for_page(edition: str, page: int) -> str | None:
+    if edition == "stable":
+        return STABLE_REVISION
+    if edition == "changing":
+        return STABLE_REVISION if page == 1 else CHANGED_REVISION
+    return None
+
+
+def revision_for_notice(edition: str, notice: Notice) -> str | None:
+    return revision_for_page(edition, page_for_notice(notice))

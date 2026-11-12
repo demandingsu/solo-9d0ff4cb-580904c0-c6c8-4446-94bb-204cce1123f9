@@ -12,6 +12,7 @@
     <ul class="feature-list">
       <li>跨分页追踪后续公告</li>
       <li>严格排除同项目其他标段</li>
+      <li>公告有修订号时核对全站同版次</li>
       <li>终止后不展示旧时间为有效</li>
     </ul>
   </div>
@@ -137,6 +138,15 @@
         <p class="side-label">抓取范围</p>
         <p class="side-value side-small">{{ result.searched_pages|length }} 个列表页 · {{ result.detail_page_count }} 个详情页</p>
       </div>
+      {% if result.revision_enforced %}
+      <div class="side-block">
+        <p class="side-label">公告版次</p>
+        <p class="side-value side-small">
+          {{ result.revision }}
+          {% if result.revision_confirmed %}· 已重读入口页确认{% else %}· 版次核对未通过{% endif %}
+        </p>
+      </div>
+      {% endif %}
     </aside>
   </div>
 
@@ -151,7 +161,7 @@
         {% for failure in result.failures %}
         <li>
           <span class="failure-reason">
-            {% if failure.stage == 'missing_original' %}未找到原公告{% else %}页面抓取或解析失败{% endif %}
+            {% if failure.stage == 'missing_original' %}未找到原公告{% elif failure.stage == 'revision' %}公告版次核对失败{% else %}页面抓取或解析失败{% endif %}
             · {{ failure.reason }}
           </span>
           <a href="{{ failure.url }}" target="_blank" rel="noopener">{{ failure.url }}</a>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ notice.title }} · 采购公告示例站{% endblock %}
 {% block content %}
-<nav class="crumbs"><a href="/notices?page=1">公告列表</a><span>/</span><span>公告详情</span></nav>
+<nav class="crumbs"><a href="/notices?page=1{% if edition != 'none' %}&edition={{ edition }}{% endif %}">公告列表</a><span>/</span><span>公告详情</span></nav>
 
 <article class="notice-detail"
          data-project-no="{{ notice.project_no }}"
@@ -42,7 +42,7 @@
 </article>
 
 <div class="detail-actions">
-  <a href="/notices?page=1">← 返回公告列表</a>
-  <span class="muted">本页为离线演示数据，不会改变真实采购安排。</span>
+  <a href="/notices?page=1{% if edition != 'none' %}&edition={{ edition }}{% endif %}">← 返回公告列表</a>
+  <span class="muted">本页为离线演示数据，不会改变真实采购安排。{% if revision %}本页修订号 {{ revision }}。{% endif %}</span>
 </div>
 {% endblock %}

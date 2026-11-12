@@ -233,6 +233,194 @@ def _data_attr(soup: BeautifulSoup, names: Sequence[str]) -> str | None:
     return None
 
 
+# A "revision" is an explicit edition marker supplied by the notice site for
+# a page.  It is not the same thing as an HTTP ETag (which is opaque and can
+# differ for harmless rendering changes), so only explicit revision metadata
+# is considered.  Sites that do not publish a revision keep the old rules.
+REVISION_META_NAMES = {
+    "revision",
+    "revision-no",
+    "revision-number",
+    "revision-id",
+    "content-revision",
+    "page-revision",
+    "data-revision",
+    "data-revision-no",
+    "data-revision-number",
+    "version",
+    "version-no",
+    "version-number",
+    "version-id",
+    "edition",
+    "edition-no",
+    "data-version",
+    "rev",
+}
+REVISION_CONTAINER_NAMES = {
+    "revision",
+    "revision-no",
+    "revision-number",
+    "page-revision",
+    "content-revision",
+    "version",
+    "version-no",
+    "rev",
+    "edition",
+}
+REVISION_ATTRS = (
+    "revision",
+    "revision-no",
+    "revision-number",
+    "page-revision",
+    "content-revision",
+    "data-revision",
+    "data-revision-no",
+    "data-revision-number",
+    "data-content-revision",
+    "data-page-revision",
+    "data-version",
+    "data-version-no",
+    "data-version-number",
+    "data-edition",
+    "data-edition-no",
+    "data-rev",
+)
+REVISION_HEADER_NAMES = (
+    "x-revision",
+    "x-revision-no",
+    "x-revision-number",
+    "x-revision-id",
+    "x-page-revision",
+    "x-content-revision",
+    "x-version",
+    "x-version-no",
+    "x-page-version",
+    "x-content-version",
+)
+REVISION_TEXT_RE = re.compile(
+    r"(?:修订号|修订编号|修订版次|修订版本|版次(?:号)?|版本号|版本|"
+    r"数据版本|数据版次|页面版本|公告版本|"
+    r"Revision(?:\s*(?:No\.?|Number))?|Rev\.?|Edition|Version)"
+    r"\s*(?:为|是)?\s*[：:=]\s*"
+    r"(?P<revision>[^\s，。；;、|（）()<>\n]{1,40})",
+    re.I,
+)
+REVISION_LABEL_PREFIX_RE = re.compile(
+    r"^(?:修订号|修订编号|修订版次|修订版本|版次(?:号)?|版本号|版本|"
+    r"数据版本|数据版次|页面版本|公告版本|"
+    r"Revision(?:\s*(?:No\.?|Number))?|Rev\.?|Edition|Version)"
+    r"(?:\s*(?:为|是)\s*)?(?:\s*[：:=]\s*|\s+)",
+    re.I,
+)
+
+
+def revision_key(value: str | None) -> str:
+    """Normalise a revision marker for comparison."""
+
+    if not value:
+        return ""
+    return normalize_space(normalize_width(value)).casefold()
+
+
+def _revision_value(value: Any) -> str | None:
+    """Clean a revision value, removing an adjacent visible label."""
+
+    if value is None:
+        return None
+    text = normalize_space(normalize_width(str(value)))
+    if not text:
+        return None
+    match = REVISION_TEXT_RE.search(text)
+    if match:
+        text = match.group("revision")
+    else:
+        text = REVISION_LABEL_PREFIX_RE.sub("", text, count=1)
+    cleaned = clean_label_value(text)
+    return cleaned or None
+
+
+def _revision_from_html(soup: BeautifulSoup) -> str | None:
+    for meta in soup.find_all("meta"):
+        raw_name = meta.get("name") or meta.get("property") or meta.get("id") or ""
+        name = re.sub(r"[_\s]+", "-", normalize_space(str(raw_name)).lower())
+        if name in REVISION_META_NAMES and meta.get("content"):
+            value = _revision_value(meta.get("content"))
+            if value:
+                return value
+
+    for attr_name in REVISION_ATTRS:
+        for tag in soup.find_all(attrs={attr_name: True}):
+            value = _revision_value(tag.get(attr_name))
+            if value:
+                return value
+
+    # Some sites mark the revision with an element id/class instead of a
+    # dedicated meta tag (for example <span id="revision">7</span>).
+    for tag in soup.find_all(id=True):
+        tag_id = re.sub(r"[_\s]+", "-", normalize_space(str(tag.get("id"))).lower())
+        if tag_id in REVISION_CONTAINER_NAMES:
+            value = _revision_value(
+                tag.get_text(" ", strip=True) or tag.get("content")
+            )
+            if value:
+                return value
+
+    for tag in soup.find_all(class_=True):
+        classes = {
+            re.sub(r"[_\s]+", "-", normalize_space(str(item)).lower())
+            for item in (tag.get("class") or [])
+        }
+        if classes & REVISION_CONTAINER_NAMES:
+            value = _revision_value(
+                tag.get_text(" ", strip=True) or tag.get("content")
+            )
+            if value:
+                return value
+
+    text = normalize_space(soup.get_text(" ", strip=True))
+    for match in REVISION_TEXT_RE.finditer(normalize_width(text)):
+        value = _revision_value(match.group("revision"))
+        if value:
+            return value
+    return None
+
+
+def _revision_from_headers(headers: Any) -> str | None:
+    if headers is None:
+        return None
+    try:
+        items = headers.items()
+    except Exception:
+        return None
+    for name, value in items:
+        if str(name).lower() not in REVISION_HEADER_NAMES or not value:
+            continue
+        revision = _revision_value(value)
+        if revision:
+            return revision
+    return None
+
+
+def extract_revision(html: str, headers: Any | None = None) -> str | None:
+    """Return the page's explicit revision marker, if the site supplies one.
+
+    HTML metadata (a ``meta`` tag or ``data-revision``/version attribute) is
+    preferred; explicit revision headers are used when the rendered page does
+    not carry a marker.  ETag/Last-Modified are deliberately ignored.
+    """
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        value = _revision_from_html(soup)
+        if value:
+            return value
+        if headers is not None:
+            return _revision_from_headers(headers)
+    except Exception:
+        return None
+    return None
+
+
 def visible_text(soup: BeautifulSoup) -> str:
     container = _article(soup)
     lines = []
@@ -836,6 +1024,9 @@ class CheckOutcome:
     checked_detail_urls: list[str]
     detail_page_count: int
     warnings: list[str]
+    revision: str | None = None
+    revision_enforced: bool = False
+    revision_confirmed: bool = False
 
     def as_dict(self, public_url_fn=None) -> dict[str, Any]:
         def pub(url: str | None) -> str | None:
@@ -890,6 +1081,9 @@ class CheckOutcome:
             "searched_pages": [pub(url) or url for url in self.searched_pages],
             "detail_page_count": self.detail_page_count,
             "warnings": self.warnings,
+            "revision": self.revision,
+            "revision_enforced": self.revision_enforced,
+            "revision_confirmed": self.revision_confirmed,
         }
 
 
@@ -904,26 +1098,27 @@ TYPE_LABELS = {
 
 async def _fetch(
     client: httpx.AsyncClient, url: str, stage: str
-) -> tuple[str | None, str | None, str]:
+) -> tuple[str | None, str | None, str, str | None]:
     try:
         response = await client.get(url)
         final_url = str(response.url)
         if response.status_code < 200 or response.status_code >= 300:
-            return None, f"HTTP {response.status_code}".strip(), final_url
+            return None, f"HTTP {response.status_code}".strip(), final_url, None
         content_type = response.headers.get("content-type", "").lower()
         if content_type and not any(
             allowed in content_type for allowed in ("text/html", "application/xhtml+xml", "text/plain")
         ):
-            return None, f"不是 HTML 页面（{content_type.split(';')[0]}）", final_url
+            return None, f"不是 HTML 页面（{content_type.split(';')[0]}）", final_url, None
         if len(response.content) > MAX_RESPONSE_BYTES:
-            return None, "页面超过大小限制", final_url
-        return response.text, None, final_url
+            return None, "页面超过大小限制", final_url, None
+        revision = extract_revision(response.text, response.headers)
+        return response.text, None, final_url, revision
     except httpx.TimeoutException:
-        return None, "请求超时", url
+        return None, "请求超时", url, None
     except httpx.HTTPError as exc:
-        return None, f"网络请求失败：{exc.__class__.__name__}", url
+        return None, f"网络请求失败：{exc.__class__.__name__}", url, None
     except Exception as exc:  # defensive: never let one bad page abort a check
-        return None, f"读取页面失败：{exc.__class__.__name__}", url
+        return None, f"读取页面失败：{exc.__class__.__name__}", url, None
 
 
 def _build_changes(records: Sequence[NoticeRecord], original: NoticeRecord | None) -> list[dict[str, Any]]:
@@ -1047,6 +1242,12 @@ async def check_lot(
     detail_count = 0
     incomplete = False
     order = 0
+    revision_observations: list[tuple[str, str, str | None]] = []
+    entry_revision: str | None = None
+    entry_revision_seen = False
+    revision_mode = False
+    base_revision: str | None = None
+    revision_confirmed = False
 
     timeout = httpx.Timeout(FETCH_TIMEOUT, connect=min(8.0, FETCH_TIMEOUT))
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
@@ -1076,7 +1277,7 @@ async def check_lot(
             seen_pages.add(page_url)
             searched_pages.append(page_url)
 
-            html, error, final_page_url = await _fetch(client, page_url, "list")
+            html, error, final_page_url, page_revision = await _fetch(client, page_url, "list")
             if html is None:
                 _problem(issues, page_url, f"公告列表页抓取失败：{error}", "list")
                 continue
@@ -1084,6 +1285,10 @@ async def check_lot(
                 if final_page_url not in searched_pages:
                     searched_pages.append(final_page_url)
                 seen_pages.add(final_page_url)
+            if not entry_revision_seen:
+                entry_revision_seen = True
+                entry_revision = page_revision
+            revision_observations.append((final_page_url, "list", page_revision))
 
             try:
                 links = extract_links(html, final_page_url)
@@ -1116,15 +1321,15 @@ async def check_lot(
                 candidates = candidates[: max(0, MAX_DETAIL_PAGES - detail_count)]
 
             async def fetch_detail(detail_url: str, anchor: Tag | None):
-                html, error, final_url = await _fetch(client, detail_url, "detail")
-                return detail_url, anchor, html, error, final_url
+                html, error, final_url, detail_revision = await _fetch(client, detail_url, "detail")
+                return detail_url, anchor, html, error, final_url, detail_revision
 
             results = await asyncio.gather(
                 *(fetch_detail(url, anchor) for url, anchor in candidates),
                 return_exceptions=False,
             )
 
-            for detail_url, anchor, detail_html, fetch_error, final_detail_url in results:
+            for detail_url, anchor, detail_html, fetch_error, final_detail_url, detail_revision in results:
                 if detail_url in seen_details:
                     continue
                 seen_details.add(detail_url)
@@ -1134,6 +1339,7 @@ async def check_lot(
                     _problem(issues, detail_url, f"公告详情页抓取失败：{fetch_error}", "detail")
                     continue
                 source_url = final_detail_url or detail_url
+                revision_observations.append((source_url, "detail", detail_revision))
                 try:
                     hints = _hints_for_anchor(anchor, detail_url) if anchor is not None else (None, None, None)
                     project_hint, section_hint, date_hint = hints
@@ -1191,6 +1397,71 @@ async def check_lot(
                         source_url=source_url,
                     )
                 )
+
+        # A revision-aware site must serve every page in this crawl round
+        # from the same edition.  Entries without a revision number cannot
+        # be trusted when the site otherwise publishes revisions.
+        non_empty_revisions = [
+            observation for observation in revision_observations if observation[2]
+        ]
+        if non_empty_revisions:
+            revision_mode = True
+            base_revision = (
+                entry_revision
+                if entry_revision is not None
+                else non_empty_revisions[0][2]
+            )
+            base_key = revision_key(base_revision)
+            for observed_url, _stage, observed_revision in revision_observations:
+                if observed_revision is None:
+                    _problem(
+                        issues,
+                        observed_url,
+                        "该页面未提供修订号，无法确认与入口页属于同一版次",
+                        "revision",
+                    )
+                elif revision_key(observed_revision) != base_key:
+                    _problem(
+                        issues,
+                        observed_url,
+                        "该页面修订号为 "
+                        f"{observed_revision}，入口页修订号为 {base_revision}，"
+                        "同一轮抓取中版次发生变化",
+                        "revision",
+                    )
+
+            # Re-read the entry page after the crawl and require the same
+            # revision.  A failed or non-revision re-read is itself an
+            # indeterminate result.
+            reread_html, reread_error, reread_final_url, reread_revision = await _fetch(
+                client, start_url, "list-reread"
+            )
+            if reread_html is None:
+                _problem(
+                    issues,
+                    start_url,
+                    f"抓取结束后重读入口页失败：{reread_error}",
+                    "revision",
+                )
+            elif reread_revision is None:
+                _problem(
+                    issues,
+                    reread_final_url or start_url,
+                    "抓取结束后重读入口页仍未提供修订号，无法确认版次未变化",
+                    "revision",
+                )
+            elif revision_key(reread_revision) != base_key:
+                _problem(
+                    issues,
+                    start_url,
+                    "抓取结束后重读入口页，修订号由 "
+                    f"{base_revision} 变为 {reread_revision}，版次已变化",
+                    "revision",
+                )
+
+        revision_confirmed = revision_mode and not any(
+            issue.stage == "revision" for issue in issues
+        )
     finally:
         if owns_client:
             await client.aclose()
@@ -1384,4 +1655,7 @@ async def check_lot(
         checked_detail_urls=checked_detail_urls,
         detail_page_count=detail_count,
         warnings=warnings,
+        revision=base_revision if revision_mode else None,
+        revision_enforced=revision_mode,
+        revision_confirmed=revision_confirmed,
     )

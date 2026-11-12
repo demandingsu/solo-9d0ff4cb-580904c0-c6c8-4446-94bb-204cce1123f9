@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% if revision %}<meta name="revision" content="{{ revision }}">{% endif %}
   <title>{% block title %}采购公告示例站{% endblock %}</title>
   <link rel="stylesheet" href="/static/demo.css">
 </head>
@@ -13,7 +14,10 @@
         <span class="brand-mark">示</span>
         <span>采购公告示例站</span>
       </a>
-      <span class="offline-tag">本地离线示例</span>
+      <div class="header-tags">
+        <span class="offline-tag">本地离线示例</span>
+        {% if revision %}<span class="revision-tag">修订号：{{ revision }}</span>{% endif %}
+      </div>
     </div>
   </header>
 

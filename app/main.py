@@ -110,6 +110,11 @@ class CheckPayload(BaseModel):
     section_no: str = Field(..., description="标段号")
 
 
+def _demo_edition_url(edition: str) -> str:
+    separator = "&" if "?" in DEMO_LIST_URL else "?"
+    return f"{DEMO_LIST_URL}{separator}edition={edition}"
+
+
 def _demo_presets() -> list[dict[str, str]]:
     presets = [
         {
@@ -132,6 +137,20 @@ def _demo_presets() -> list[dict[str, str]]:
             "project_no": "DEMO-2026-002",
             "section_no": "A",
             "note": "A 包；结果公告不应改变截止时间",
+        },
+        {
+            "name": "稳定版（修订号一致）",
+            "list_url": _demo_edition_url("stable"),
+            "project_no": "DEMO-2026-001",
+            "section_no": "02",
+            "note": "列表与详情同版次，抓完后重读入口页确认",
+        },
+        {
+            "name": "翻页时换版（应无法判定）",
+            "list_url": _demo_edition_url("changing"),
+            "project_no": "DEMO-2026-001",
+            "section_no": "02",
+            "note": "第 2 页起修订号变化，本轮截止时间应清空",
         },
     ]
     for preset in presets:

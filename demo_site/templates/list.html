@@ -10,6 +10,13 @@
   <div class="page-chip">第 {{ page }} / {{ total_pages }} 页</div>
 </section>
 
+<div class="edition-switch">
+  <span class="edition-label">演示入口：</span>
+  <a class="{% if edition == 'none' %}active{% endif %}" href="/notices?page=1">无修订号（原核对规则）</a>
+  <a class="{% if edition == 'stable' %}active{% endif %}" href="/notices?page=1&edition=stable">稳定版（全站同一修订号）</a>
+  <a class="{% if edition == 'changing' %}active{% endif %}" href="/notices?page=1&edition=changing">翻页时换版（第 2 页起变化）</a>
+</div>
+
 <table class="notice-table">
   <thead>
     <tr>
@@ -23,7 +30,7 @@
     <tr>
       <td>
         <a class="notice-link"
-           href="/notices/detail/{{ notice.slug }}"
+           href="/notices/detail/{{ notice.slug }}{% if edition != 'none' %}?edition={{ edition }}{% endif %}"
            data-project-no="{{ notice.project_no }}"
            data-section-no="{{ notice.section_no }}">
           {{ notice.title }}
@@ -39,7 +46,7 @@
 
 <nav class="pager" aria-label="分页">
   {% if page > 1 %}
-  <a href="/notices?page={{ page - 1 }}" rel="prev">← 上一页</a>
+  <a href="/notices?page={{ page - 1 }}{% if edition != 'none' %}&edition={{ edition }}{% endif %}" rel="prev">← 上一页</a>
   {% else %}
   <span class="disabled">← 上一页</span>
   {% endif %}
@@ -49,17 +56,17 @@
       {% if n == page %}
       <span class="current" aria-current="page">{{ n }}</span>
       {% else %}
-      <a href="/notices?page={{ n }}">{{ n }}</a>
+      <a href="/notices?page={{ n }}{% if edition != 'none' %}&edition={{ edition }}{% endif %}">{{ n }}</a>
       {% endif %}
     {% endfor %}
   </div>
 
   {% if page < total_pages %}
-  <a href="/notices?page={{ page + 1 }}" rel="next">下一页 →</a>
+  <a href="/notices?page={{ page + 1 }}{% if edition != 'none' %}&edition={{ edition }}{% endif %}" rel="next">下一页 →</a>
   {% else %}
   <span class="disabled">下一页 →</span>
   {% endif %}
 </nav>
 
-<p class="demo-note">共 {{ total_count }} 条公告。可核验项目 <code>DEMO-2026-001</code> 的 01、02 标段，或项目 <code>DEMO-2026-002</code> 的 A 包。</p>
+<p class="demo-note">共 {{ total_count }} 条公告。可核验项目 <code>DEMO-2026-001</code> 的 01、02 标段，或项目 <code>DEMO-2026-002</code> 的 A 包。“稳定版”所有页面修订号一致；“翻页时换版”从第 2 页起修订号变化，核验工具应拒绝合并并列出版次问题地址。</p>
 {% endblock %}

@@ -21,9 +21,13 @@ def detail(
     published: str,
     body: str,
     title: str = "公告",
+    revision: str | None = None,
 ) -> str:
+    revision_meta = (
+        f'<meta name="revision" content="{revision}">' if revision else ""
+    )
     return f"""
-    <html><body><article
+    <html><head>{revision_meta}</head><body><article
       data-project-no="{project}" data-section-no="{section}"
       data-notice-type="{type_code}" data-publish-time="{published}">
       <h1>{title}</h1>
@@ -38,6 +42,7 @@ def link_list(
     section: str,
     hrefs: list[str],
     next_href: str | None = None,
+    revision: str | None = None,
 ) -> str:
     rows = "".join(
         f'<li><a class="notice-link" data-project-no="{project}"'
@@ -45,7 +50,10 @@ def link_list(
         for href in hrefs
     )
     pager = f'<a rel="next" href="{next_href}">下一页</a>' if next_href else ""
-    return f"<html><body><main><ul>{rows}</ul>{pager}</main></body></html>"
+    revision_meta = (
+        f'<meta name="revision" content="{revision}">' if revision else ""
+    )
+    return f"<html><head>{revision_meta}</head><body><main><ul>{rows}</ul>{pager}</main></body></html>"
 
 
 ORIGINAL = detail(
@@ -204,6 +212,171 @@ class CrawlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["effective_deadline"], "2026-11-09 09:30")
         self.assertEqual(
             result["deadline_source_url"], "http://test/d/extension"
+        )
+
+    async def test_revision_consistent_site_is_determinable(self):
+        routes = {
+            "/list": link_list(
+                "P-001", "01", ["/d/original"], next_href="/list2", revision="R7"
+            ),
+            "/list2": link_list("P-001", "01", ["/d/extension"], revision="R7"),
+            "/d/original": detail(
+                "P-001", "01", "original", "2026-10-01 09:00",
+                "投标截止时间：2026年11月02日 09:30。", "原公告", revision="R7",
+            ),
+            "/d/extension": detail(
+                "P-001", "01", "extension", "2026-10-10 09:00",
+                "原投标截止时间为2026年11月02日 09:30，现延期至：2026年11月09日 09:30。",
+                "延期公告", revision="R7",
+            ),
+        }
+        result = (
+            await check_lot(
+                "http://test/list", "P-001", "01",
+                client_factory=self.make_factory(routes),
+            )
+        ).as_dict()
+        self.assertEqual(result["status"], "extended")
+        self.assertTrue(result["determinable"])
+        self.assertEqual(result["effective_deadline"], "2026-11-09 09:30")
+        self.assertTrue(result["revision_enforced"])
+        self.assertTrue(result["revision_confirmed"])
+        self.assertEqual(result["revision"], "R7")
+
+    async def test_mixed_revisions_in_one_round_make_result_unknown(self):
+        routes = {
+            "/list": link_list(
+                "P-001", "01", ["/d/original"], next_href="/list2", revision="R7"
+            ),
+            "/list2": link_list("P-001", "01", ["/d/extension"], revision="R8"),
+            "/d/original": detail(
+                "P-001", "01", "original", "2026-10-01 09:00",
+                "投标截止时间：2026年11月02日 09:30。", "原公告", revision="R7",
+            ),
+            "/d/extension": detail(
+                "P-001", "01", "extension", "2026-10-10 09:00",
+                "原投标截止时间为2026年11月02日 09:30，现延期至：2026年11月09日 09:30。",
+                "延期公告", revision="R8",
+            ),
+        }
+        result = (
+            await check_lot(
+                "http://test/list", "P-001", "01",
+                client_factory=self.make_factory(routes),
+            )
+        ).as_dict()
+        self.assertEqual(result["status"], "unknown")
+        self.assertFalse(result["determinable"])
+        self.assertIsNone(result["effective_deadline"])
+        self.assertTrue(result["revision_enforced"])
+        self.assertFalse(result["revision_confirmed"])
+        revision_failures = [
+            failure for failure in result["failures"] if failure["stage"] == "revision"
+        ]
+        self.assertIn("http://test/list2", [failure["url"] for failure in revision_failures])
+        self.assertIn(
+            "http://test/d/extension", [failure["url"] for failure in revision_failures]
+        )
+
+    async def test_missing_revision_on_one_page_makes_result_unknown(self):
+        routes = {
+            "/list": link_list(
+                "P-001", "01", ["/d/original"], next_href="/list2", revision="R7"
+            ),
+            "/list2": link_list("P-001", "01", ["/d/extension"]),
+            "/d/original": detail(
+                "P-001", "01", "original", "2026-10-01 09:00",
+                "投标截止时间：2026年11月02日 09:30。", "原公告", revision="R7",
+            ),
+            "/d/extension": detail(
+                "P-001", "01", "extension", "2026-10-10 09:00",
+                "原投标截止时间为2026年11月02日 09:30，现延期至：2026年11月09日 09:30。",
+                "延期公告", revision="R7",
+            ),
+        }
+        result = (
+            await check_lot(
+                "http://test/list", "P-001", "01",
+                client_factory=self.make_factory(routes),
+            )
+        ).as_dict()
+        self.assertEqual(result["status"], "unknown")
+        self.assertIsNone(result["effective_deadline"])
+        self.assertIn(
+            "http://test/list2",
+            [failure["url"] for failure in result["failures"] if failure["stage"] == "revision"],
+        )
+
+    def make_sequence_factory(self, list_responses):
+        calls = {"list": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path == "/list":
+                index = min(calls["list"], len(list_responses) - 1)
+                calls["list"] += 1
+                response = list_responses[index]
+                if isinstance(response, httpx.Response):
+                    return response
+                return httpx.Response(
+                    200, text=response, headers={"content-type": "text/html"}
+                )
+            if path == "/d/original":
+                return httpx.Response(
+                    200,
+                    text=detail(
+                        "P-001", "01", "original", "2026-10-01 09:00",
+                        "投标截止时间：2026年11月02日 09:30。", "原公告", revision="R7",
+                    ),
+                    headers={"content-type": "text/html"},
+                )
+            return httpx.Response(404, text="not found")
+
+        def factory():
+            return httpx.AsyncClient(
+                transport=httpx.MockTransport(handler), follow_redirects=True
+            )
+
+        return factory
+
+    async def test_entry_reread_revision_change_makes_result_unknown(self):
+        first_list = link_list(
+            "P-001", "01", ["/d/original"], revision="R7"
+        )
+        second_list = link_list(
+            "P-001", "01", ["/d/original"], revision="R8"
+        )
+        result = (
+            await check_lot(
+                "http://test/list", "P-001", "01",
+                client_factory=self.make_sequence_factory([first_list, second_list]),
+            )
+        ).as_dict()
+        self.assertEqual(result["status"], "unknown")
+        self.assertIsNone(result["effective_deadline"])
+        self.assertFalse(result["revision_confirmed"])
+        self.assertIn(
+            "http://test/list",
+            [failure["url"] for failure in result["failures"] if failure["stage"] == "revision"],
+        )
+
+    async def test_entry_reread_failure_makes_result_unknown(self):
+        first_list = link_list(
+            "P-001", "01", ["/d/original"], revision="R7"
+        )
+        failed = httpx.Response(503, text="service unavailable")
+        result = (
+            await check_lot(
+                "http://test/list", "P-001", "01",
+                client_factory=self.make_sequence_factory([first_list, failed]),
+            )
+        ).as_dict()
+        self.assertEqual(result["status"], "unknown")
+        self.assertIsNone(result["effective_deadline"])
+        self.assertFalse(result["revision_confirmed"])
+        self.assertIn(
+            "http://test/list",
+            [failure["url"] for failure in result["failures"] if failure["stage"] == "revision"],
         )
 
 
